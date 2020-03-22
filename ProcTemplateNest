@@ -1,0 +1,73 @@
+CREATE PROCEDURE [SkyNet].[ProcTemplateNest]
+(
+    @TransactionID  INT           = NULL,
+    @StartNewTran   BIT           = 0,
+    @IncidentOutput VARCHAR(2000) = NULL OUTPUT,
+    @ThisProgram    VARCHAR(1000) = NULL OUTPUT,
+    @Success        BIT           = 1 OUTPUT
+)
+AS
+    DECLARE @DatabaseName   VARCHAR(20) = DB_NAME(),
+            @LogID          INT,
+            @SignUpTypeID   INT         = 1, --Default
+            @SourceFileName VARCHAR(20) = '';
+    BEGIN
+        BEGIN TRY
+            SELECT @ThisProgram = OBJECT_SCHEMA_NAME(@@PROCID) + '.' + OBJECT_NAME(@@PROCID);
+
+            EXECUTE SkyNet.syn_Log_Begin_Transaction @ThisProgram = @ThisProgram,
+                                                     @DatabaseName = @DatabaseName,
+                                                     @StartNewTran = @StartNewTran OUTPUT,
+                                                     @TransactionID = @TransactionID OUTPUT;
+
+            IF @StartNewTran = 1
+                BEGIN TRANSACTION;
+
+            EXECUTE SkyNet.syn_Insert_Audit_Log @TransactionID = @TransactionID,
+                                                @LogSourceOfCode = @ThisProgram,
+                                                @StatusID = 1,
+                                                @LogID = @LogID OUTPUT;
+
+            -----------------------------------------------------------------
+            -----------------------Start Code--------------------------------
+            -----------------------------------------------------------------
+            SELECT 'YOUR CODE HERE';
+            -----------------------------------------------------------------
+            -----------------------End Code----------------------------------
+            -----------------------------------------------------------------
+
+            ----Jump to Catch Block if nested stored proc failed --> @Success <> 1
+            IF @Success <> 1
+                THROW 1, @IncidentOutput, 1;
+            ELSE
+                BEGIN
+                    EXECUTE SkyNet.syn_Log_Commit_Transaction @TransactionID = @TransactionID,
+                                                              @LogID = @LogID,
+                                                              @NestLevel = @@NESTLEVEL;
+
+                    IF @StartNewTran = 1
+                        COMMIT TRAN;
+                END;
+        END TRY
+        BEGIN CATCH
+            SET @Success = 0; --"Fail"
+            IF @IncidentOutput IS NULL
+                SELECT @IncidentOutput = 'Error Number ' + CAST(ERROR_NUMBER() AS VARCHAR(10)) + ' - ' + ERROR_MESSAGE(),
+                       @ThisProgram = OBJECT_SCHEMA_NAME(@@PROCID) + '.' + OBJECT_NAME(@@PROCID);
+
+            IF @@TRANCOUNT > 0
+           AND @StartNewTran = 1
+                ROLLBACK TRANSACTION;
+
+            IF @@NESTLEVEL <= 1 --Look into this for procedures not using a transaction
+                BEGIN
+                    EXECUTE SkyNet.syn_Log_Rollback_Transaction @TransactionID = @TransactionID,
+                                                                @ThisProgram = @ThisProgram,
+                                                                @SignUpTypeID = @SignUpTypeID,
+                                                                @IncidentOutput = @IncidentOutput,
+                                                                @IsIncident = 1,
+                                                                @IsWarning = 0,
+                                                                @LogID = @LogID; --"Error"
+                END;
+        END CATCH;
+    END;
